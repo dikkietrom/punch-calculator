@@ -25,6 +25,10 @@ const state = {
     // Animation
     isPlaying: false,
     time: 0,
+    // Current instantaneous angles (degrees) used when not animating
+    hipAngleDeg: 0,
+    shoulderAngleDeg: 0,
+    elbowAngleDeg: 0,
     // Punch type
     selectedPunch: 'jab',
     // Canvas and animation
@@ -138,6 +142,21 @@ function updateSliderValues() {
     if (sliders.elbowRotation) {
         sliders.elbowRotation.slider.value = state.elbowRotation;
         sliders.elbowRotation.valueDisplay.textContent = state.elbowRotation;
+    }
+
+    if (sliders.hipInitial) {
+        sliders.hipInitial.slider.value = state.hipInitialAngle || 0;
+        sliders.hipInitial.valueDisplay.textContent = state.hipInitialAngle || 0;
+    }
+
+    if (sliders.shoulderInitial) {
+        sliders.shoulderInitial.slider.value = state.shoulderInitialAngle || 0;
+        sliders.shoulderInitial.valueDisplay.textContent = state.shoulderInitialAngle || 0;
+    }
+
+    if (sliders.elbowInitial) {
+        sliders.elbowInitial.slider.value = state.elbowInitialAngle || 0;
+        sliders.elbowInitial.valueDisplay.textContent = state.elbowInitialAngle || 0;
     }
 }
 
@@ -376,13 +395,29 @@ function render() {
     // Draw grid (scaled with zoom)
     drawGrid(ctx, canvas.width, canvas.height);
     
-    // Calculate angles based on time and rotation speeds plus initial angles - proper kinetic chain
-    const hipAngle = (state.hipInitialAngle * Math.PI / 180) + (state.time * state.hipRotation * Math.PI / 180) % (2 * Math.PI);
-    const spineAngle = (state.spineInitialAngle * Math.PI / 180) + hipAngle + (state.time * state.spineSpring * Math.PI / 180) % (2 * Math.PI);
-    // Collar bone rotation is a result of hip rotation and spine spring combined
-    const collarAngle = (state.collarInitialAngle * Math.PI / 180) + hipAngle + spineAngle;
-    const shoulderAngle = (state.shoulderInitialAngle * Math.PI / 180) + (state.time * state.shoulderRotation * Math.PI / 180) % (2 * Math.PI);
-    const elbowAngle = (state.elbowInitialAngle * Math.PI / 180) + shoulderAngle + (state.time * state.elbowRotation * Math.PI / 180) % (2 * Math.PI);
+    // Calculate angles: if playing, compute from rotation speeds; if paused, use instantaneous slider-set angles
+    let hipAngle;
+    let shoulderAngle;
+    let elbowAngle;
+
+    if (state.isPlaying) {
+        // hipAngular: hip rotation angle (radians)
+        hipAngle = (state.time * state.hipRotation * Math.PI / 180) % (2 * Math.PI);
+        shoulderAngle = (state.time * state.shoulderRotation * Math.PI / 180) % (2 * Math.PI);
+        elbowAngle = shoulderAngle + (state.time * state.elbowRotation * Math.PI / 180) % (2 * Math.PI);
+    } else {
+        // Use instantaneous angles (converted from degrees)
+        hipAngle = (state.hipAngleDeg || 0) * Math.PI / 180;
+        shoulderAngle = (state.shoulderAngleDeg || 0) * Math.PI / 180;
+        elbowAngle = (state.elbowAngleDeg || 0) * Math.PI / 180;
+    }
+
+    // Map spineSpring (k) to a time constant tau: higher k -> faster response (smaller tau)
+    const k = Math.max(0.0001, state.spineSpring);
+    const tau = 0.2 + (100 - Math.min(100, k)) / 100 * 0.8; // tau in seconds, clamped
+
+    // For immediate sync: collar follows hip exactly
+    const collarAngle = hipAngle;
     
     // Draw hip (foundation of the kinetic chain) - same position as collar bones in top view
     const hip = drawHip(ctx, centerX, centerY, hipAngle, state.hipLength * state.pixelsPerCm);
@@ -454,7 +489,10 @@ function init() {
     const hipGroup = createParameterGroup('Hip Rotation', [
         createSlider('Hip Rotation Speed (°/s)', state.hipRotation, 0, 180, 5, (value) => {
             state.hipRotation = value;
+            // Update instantaneous hip angle (deg) to reflect new speed at the current time
+            state.hipAngleDeg = ((state.time * value) % 360);
             console.log('Hip rotation:', value, '°/s');
+            render();
         }, 'hipRotation')
     ]);
     
@@ -463,6 +501,7 @@ function init() {
         createSlider('Spine Spring (k)', state.spineSpring, 0, 180, 5, (value) => {
             state.spineSpring = value;
             console.log('Spine spring constant:', value);
+            render();
         }, 'spineSpring')
     ]);
     
@@ -470,7 +509,10 @@ function init() {
     const shoulderGroup = createParameterGroup('Shoulder Rotation', [
         createSlider('Shoulder Speed (°/s)', state.shoulderRotation, 0, 360, 10, (value) => {
             state.shoulderRotation = value;
+            // Update instantaneous shoulder angle (deg) to reflect new speed at the current time
+            state.shoulderAngleDeg = ((state.time * value) % 360);
             console.log('Shoulder rotation:', value, '°/s');
+            render();
         }, 'shoulderRotation')
     ]);
     
@@ -478,7 +520,10 @@ function init() {
     const elbowGroup = createParameterGroup('Elbow Rotation', [
         createSlider('Elbow Speed (°/s)', state.elbowRotation, 0, 540, 10, (value) => {
             state.elbowRotation = value;
+            // Update instantaneous elbow angle (deg) to reflect new speed at the current time
+            state.elbowAngleDeg = ((state.time * value) % 360);
             console.log('Elbow rotation:', value, '°/s');
+            render();
         }, 'elbowRotation')
     ]);
     
@@ -750,21 +795,24 @@ function init() {
     // Initial angles tab pane
     const anglesPane = createElement('div', 'tab-pane');
     const initialAnglesGroup = createParameterGroup('Initial Bone Angles', [
-        createSlider('Hip Initial (°)', state.hipInitialAngle || 0, -45, 45, 1, (value) => {
+    createSlider('Hip Initial (°)', state.hipInitialAngle || 0, -45, 45, 1, (value) => {
             state.hipInitialAngle = value;
+            state.hipAngleDeg = value;
             render();
             console.log('Hip initial angle:', value, '°');
-        }),
-        createSlider('Shoulder Initial (°)', state.shoulderInitialAngle || 0, -90, 90, 1, (value) => {
+    }, 'hipInitial'),
+    createSlider('Shoulder Initial (°)', state.shoulderInitialAngle || 0, -90, 90, 1, (value) => {
             state.shoulderInitialAngle = value;
+            state.shoulderAngleDeg = value;
             render();
             console.log('Shoulder initial angle:', value, '°');
-        }),
-        createSlider('Elbow Initial (°)', state.elbowInitialAngle || 0, -150, 30, 1, (value) => {
+    }, 'shoulderInitial'),
+    createSlider('Elbow Initial (°)', state.elbowInitialAngle || 0, -150, 30, 1, (value) => {
             state.elbowInitialAngle = value;
+            state.elbowAngleDeg = value;
             render();
             console.log('Elbow initial angle:', value, '°');
-        })
+    }, 'elbowInitial')
     ]);
     anglesPane.appendChild(initialAnglesGroup);
     
